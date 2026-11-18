@@ -254,6 +254,23 @@ app.get('/api/games', (_req, res) => {
   const games = db.prepare('SELECT id, league, home, away, kickoff, odds FROM games WHERE published = 1 ORDER BY kickoff ASC').all()
   res.json({ games })
 })
+app.get('/api/admin/payments', requireAdmin, (_req, res) => {
+  const rows = db.prepare(`
+    SELECT p.checkout_id, p.phone, p.amount, p.status, p.receipt, p.created_at, p.paid_at,
+           COALESCE(b.title, 'Deleted prediction package') AS package_title
+    FROM payments p LEFT JOIN bet_packages b ON b.id = p.package_id
+    ORDER BY p.created_at DESC LIMIT 100
+  `).all().map(p => ({
+    ...p,
+    phone: p.phone.length >= 4 ? '••••' + p.phone.slice(-4) : '••••',
+  }))
+  const totals = db.prepare(`
+    SELECT COUNT(*) AS paid_count, COALESCE(SUM(amount), 0) AS paid_total
+    FROM payments WHERE status = 'PAID'
+  `).get()
+  res.json({ payments: rows, paidCount: totals.paid_count, paidTotal: totals.paid_total })
+})
+
 app.get('/api/admin/games', requireAdmin, (_req, res) => {
   res.json({ games: db.prepare('SELECT * FROM games ORDER BY created_at DESC').all() })
 })

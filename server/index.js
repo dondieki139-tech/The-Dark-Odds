@@ -168,10 +168,8 @@ app.post('/api/daraja/callback', (req, res) => {
       return res.json({ ResultCode: 0, ResultDesc: 'Accepted' })
     }
     const now = new Date()
-    const packRelease = payment.package_id ? db.prepare('SELECT release_at FROM bet_packages WHERE id = ?').get(payment.package_id) : null
-    const releaseTime = packRelease ? new Date(packRelease.release_at) : now
-    const accessStart = releaseTime > now ? releaseTime : now
-    const expiry = new Date(accessStart.getTime() + 24 * 60 * 60 * 1000).toISOString()
+    // A verified purchase unlocks its package immediately for 24 hours.
+    const expiry = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString()
     const grant = db.transaction(() => {
       db.prepare("UPDATE payments SET status = 'PAID', receipt = ?, result_code = '0', paid_at = ? WHERE checkout_id = ?")
         .run(receipt, now.toISOString(), payment.checkout_id)
@@ -307,7 +305,6 @@ app.get('/api/bets/:id', (req, res) => {
   if (!phone) return res.status(400).json({ error: 'Enter the M-Pesa phone number used for this prediction package.' })
   const pack = db.prepare('SELECT * FROM bet_packages WHERE id = ? AND published = 1').get(req.params.id)
   if (!pack) return res.status(404).json({ error: 'Bet slip not found.' })
-  if (new Date(pack.release_at) > new Date()) return res.status(403).json({ error: 'This prediction package has not been released yet.' })
   const access = db.prepare('SELECT expires_at FROM package_access WHERE phone = ? AND package_id = ?').get(phone, pack.id)
   if (!access || new Date(access.expires_at) <= new Date()) return res.status(403).json({ error: 'Payment for this specific prediction package is required.' })
   res.json({ bet: { id: pack.id, title: pack.title, betDate: pack.bet_date, releaseAt: pack.release_at, result: betResult(pack),

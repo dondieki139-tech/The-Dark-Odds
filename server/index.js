@@ -150,7 +150,10 @@ app.post('/api/daraja/callback', (req, res) => {
       return res.json({ ResultCode: 0, ResultDesc: 'Accepted' })
     }
     const now = new Date()
-    const expiry = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString()
+    const packRelease = payment.package_id ? db.prepare('SELECT release_at FROM bet_packages WHERE id = ?').get(payment.package_id) : null
+    const releaseTime = packRelease ? new Date(packRelease.release_at) : now
+    const accessStart = releaseTime > now ? releaseTime : now
+    const expiry = new Date(accessStart.getTime() + 24 * 60 * 60 * 1000).toISOString()
     const grant = db.transaction(() => {
       db.prepare("UPDATE payments SET status = 'PAID', receipt = ?, result_code = '0', paid_at = ? WHERE checkout_id = ?")
         .run(receipt, now.toISOString(), payment.checkout_id)

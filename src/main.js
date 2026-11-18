@@ -33,10 +33,57 @@ document.querySelector('#root').innerHTML = `
     </section>
     <section class="premium-section" id="premium">
       <div class="premium-copy"><div class="eyebrow">02 — MEMBERSHIP</div><h2>Go beyond<br><em>the ordinary.</em></h2><p>Get access to our premium analysis feed when membership is activated and verified by the team.</p><ul><li>Premium match analysis</li><li>Selection reasoning and risk notes</li><li>Daily access for 24 hours after approval</li></ul></div>
-      <div class="price-card"><div class="card-top"><span>THE DARK ODDS / VIP</span><span class="lock">✦</span></div><div class="price">${price}<small> / 24 hours</small></div><p>One-time payment. Access starts after manual payment verification.</p><div class="divider"></div><h3>Pay with M-Pesa</h3><ol><li>Open M-Pesa on your phone.</li><li>Choose <b>Send Money</b>.</li><li>Send ${price.replace('KSh ','')} to <b>${paymentNumber}</b>.</li><li>Keep your M-Pesa confirmation message.</li></ol><a class="button primary full" href="https://wa.me/254746771677?text=Hello%20The%20Dark%20Odds%2C%20I%20have%20paid%20for%20VIP%20access.%20Please%20tell%20me%20how%20to%20submit%20my%20M-Pesa%20confirmation.">I have paid — contact support ↗</a><small class="fine-print">Payment is not automatically verified on this website. Do not share your M-Pesa PIN or one-time password. Membership is activated only after the team confirms receipt.</small></div>
+      <div class="price-card"><div class="card-top"><span>THE DARK ODDS / VIP</span><span class="lock">✦</span></div><div class="price">${price}<small> / 24 hours</small></div><p>One-time payment. Access starts after manual payment verification.</p><div class="divider"></div><h3>Pay securely with M-Pesa</h3><p>Enter the phone number registered with M-Pesa. We'll send a payment prompt for KSh 360.</p><form id="stk-form" class="stk-form"><label for="mpesa-phone">M-Pesa phone number</label><input id="mpesa-phone" name="phone" type="tel" inputmode="tel" placeholder="07XXXXXXXX" autocomplete="tel" required><button class="button primary full" id="stk-submit" type="submit">Send payment prompt ↗</button><p id="stk-message" class="fine-print" role="status">Your PIN is entered only on your phone's official M-Pesa prompt — never on this website.</p></form><a class="text-link" href="https://wa.me/254746771677">Need help? Contact support ↗</a></div>
     </section>
     <section class="section how-section" id="how"><div class="section-head"><div><div class="eyebrow">03 — SIMPLE & CLEAR</div><h2>How it <em>works</em></h2></div></div><div class="steps"><div><b>01</b><h3>Explore</h3><p>Read the public match previews and analysis.</p></div><div><b>02</b><h3>Subscribe</h3><p>Pay KSh 360 using the M-Pesa number above.</p></div><div><b>03</b><h3>Verify</h3><p>Send your confirmation to support for a manual check.</p></div><div><b>04</b><h3>Get access</h3><p>Once approved, your 24-hour VIP period begins.</p></div></div></section>
     <section class="responsible"><span>18+ ONLY</span><p>Betting involves financial risk. There are no guaranteed wins. Only participate where legal, never stake money you cannot afford to lose, and take a break if betting stops being enjoyable.</p></section>
   </main>
   <footer><a class="brand" href="#"><span class="brand-mark">D</span><span>THE DARK <b>ODDS</b></span></a><span>© ${new Date().getFullYear()} THE DARK ODDS</span><a href="https://wa.me/254746771677">CONTACT SUPPORT ↗</a></footer>
 `
+
+
+const stkForm = document.querySelector('#stk-form')
+if (stkForm) {
+  const message = document.querySelector('#stk-message')
+  const submit = document.querySelector('#stk-submit')
+  const apiBase = (import.meta.env.VITE_API_BASE || '').replace(/\\/$/, '')
+  stkForm.addEventListener('submit', async (event) => {
+    event.preventDefault()
+    const phone = document.querySelector('#mpesa-phone').value.trim()
+    submit.disabled = true
+    message.textContent = 'Connecting to M-Pesa…'
+    try {
+      const response = await fetch(apiBase + '/api/stkpush', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone })
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Could not start payment.')
+      message.textContent = data.message + ' Keep this page open while we confirm payment.'
+      const checkoutId = data.checkoutRequestId
+      let attempts = 0
+      const poll = async () => {
+        if (attempts++ >= 24) { message.textContent = 'Payment is still pending. If you approved the prompt, contact support with your M-Pesa confirmation.'; submit.disabled = false; return }
+        try {
+          const check = await fetch(apiBase + '/api/payment/' + encodeURIComponent(checkoutId))
+          const status = await check.json()
+          if (status.status === 'PAID') {
+            message.textContent = 'Payment confirmed! Your 24-hour VIP access is active until ' + new Date(status.activeUntil).toLocaleString() + '.'
+            submit.disabled = false
+            return
+          }
+          if (status.status === 'FAILED') {
+            message.textContent = 'Payment was not completed. You can try again.'
+            submit.disabled = false
+            return
+          }
+        } catch {}
+        setTimeout(poll, 5000)
+      }
+      setTimeout(poll, 5000)
+    } catch (error) {
+      message.textContent = error.message
+      submit.disabled = false
+    }
+  })
+}

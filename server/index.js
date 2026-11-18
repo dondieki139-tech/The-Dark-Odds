@@ -103,7 +103,7 @@ app.post('/api/daraja/callback', (req, res) => {
     const callback = req.body?.Body?.stkCallback
     if (!callback?.CheckoutRequestID) return res.json({ ResultCode: 0, ResultDesc: 'Accepted' })
     const payment = db.prepare('SELECT * FROM payments WHERE checkout_id = ?').get(callback.CheckoutRequestID)
-    if (!payment) return res.json({ ResultCode: 0, ResultDesc: 'Accepted' })
+    if (!payment || payment.status === 'PAID') return res.json({ ResultCode: 0, ResultDesc: 'Accepted' })
     const resultCode = String(callback.ResultCode)
     if (resultCode !== '0') {
       db.prepare('UPDATE payments SET status = ?, result_code = ? WHERE checkout_id = ?')

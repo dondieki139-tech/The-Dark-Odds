@@ -34,6 +34,11 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS memberships (
     phone TEXT PRIMARY KEY, expires_at TEXT NOT NULL, receipt TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS games (
+    id TEXT PRIMARY KEY, league TEXT NOT NULL, home TEXT NOT NULL, away TEXT NOT NULL,
+    kickoff TEXT NOT NULL, pick TEXT NOT NULL, odds TEXT, analysis TEXT,
+    published INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+  );
 `)
 
 let tokenCache = { value: null, expires: 0 }
@@ -159,6 +164,83 @@ app.get('/api/membership', (req, res) => {
   const membership = db.prepare('SELECT expires_at FROM memberships WHERE phone = ?').get(phone)
   const active = Boolean(membership && new Date(membership.expires_at) > new Date())
   res.json({ active, expiresAt: active ? membership.expires_at : null })
+})
+
+
+const adminPassword = process.env.ADMIN_PASSWORD || ''
+const adminSessionSecret = process.env.ADMIN_SESSION_SECRET || ''
+function safeEqual(a, b) {
+  const left = Buffer.from(String(a))
+  const right = Buffer.from(String(b))
+  return left.length === right.length && crypto.timingSafeEqual(left, right)
+}
+function signAdminToken(payload) {
+  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url')
+  const signature = crypto.createHmac('sha256', adminSessionSecret).update(encoded).digest('base64url')
+  return encoded + '.' + signature
+}
+function requireAdmin(req, res, next) {
+  const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '')
+  const parts = token.split('.')
+  if (!adminSessionSecret || parts.length !== 2) return res.status(401).json({ error: 'Admin sign-in required.' })
+  const expected = crypto.createHmac('sha256', adminSessionSecret).update(parts[0]).digest('base64url')
+  if (!safeEqual(expected, parts[1])) return res.status(401).json({ error: 'Admin session is invalid. Sign in again.' })
+  try {
+    const payload = JSON.parse(Buffer.from(parts[0], 'base64url').toString())
+    if (payload.exp < Date.now() || payload.role !== 'admin') return res.status(401).json({ error: 'Admin session expired. Sign in again.' })
+  } catch {
+    return res.status(401).json({ error: 'Admin session is invalid.' })
+  }
+  next()
+}
+function cleanGame(body) {
+  const value = {
+    league: String(body?.league || '').trim().slice(0, 80),
+    home: String(body?.home || '').trim().slice(0, 80),
+    away: String(body?.away || '').trim().slice(0, 80),
+    kickoff: String(body?.kickoff || '').trim().slice(0, 40),
+    pick: String(body?.pick || '').trim().slice(0, 160),
+    odds: String(body?.odds || '').trim().slice(0, 30),
+    analysis: String(body?.analysis || '').trim().slice(0, 2000),
+    published: body?.published === true ? 1 : 0
+  }
+  if (!value.league || !value.home || !value.away || !value.kickoff || !value.pick) return null
+  return value
+}
+app.post('/api/admin/login', (req, res) => {
+  if (!adminPassword || !adminSessionSecret) return res.status(503).json({ error: 'Admin access is not configured. Set ADMIN_PASSWORD and ADMIN_SESSION_SECRET in Render.' })
+  if (!safeEqual(req.body?.password || '', adminPassword)) return res.status(401).json({ error: 'Incorrect admin password.' })
+  const token = signAdminToken({ role: 'admin', exp: Date.now() + 12 * 60 * 60 * 1000 })
+  res.json({ token, expiresIn: 43200 })
+})
+app.get('/api/games', (_req, res) => {
+  const games = db.prepare('SELECT id, league, home, away, kickoff, odds FROM games WHERE published = 1 ORDER BY kickoff ASC').all()
+  res.json({ games })
+})
+app.get('/api/admin/games', requireAdmin, (_req, res) => {
+  res.json({ games: db.prepare('SELECT * FROM games ORDER BY created_at DESC').all() })
+})
+app.post('/api/admin/games', requireAdmin, (req, res) => {
+  const game = cleanGame(req.body)
+  if (!game) return res.status(400).json({ error: 'Complete the league, teams, kickoff, and paid selection fields.' })
+  const id = crypto.randomUUID()
+  db.prepare(`INSERT INTO games (id, league, home, away, kickoff, pick, odds, analysis, published, created_at)
+    VALUES (@id, @league, @home, @away, @kickoff, @pick, @odds, @analysis, @published, @created_at)`)
+    .run({ id, ...game, created_at: new Date().toISOString() })
+  res.status(201).json({ ok: true, id })
+})
+app.put('/api/admin/games/:id', requireAdmin, (req, res) => {
+  const game = cleanGame(req.body)
+  if (!game) return res.status(400).json({ error: 'Complete the league, teams, kickoff, and paid selection fields.' })
+  const result = db.prepare(`UPDATE games SET league=@league, home=@home, away=@away, kickoff=@kickoff,
+    pick=@pick, odds=@odds, analysis=@analysis, published=@published WHERE id=@id`).run({ ...game, id: req.params.id })
+  if (!result.changes) return res.status(404).json({ error: 'Game not found.' })
+  res.json({ ok: true })
+})
+app.delete('/api/admin/games/:id', requireAdmin, (req, res) => {
+  const result = db.prepare('DELETE FROM games WHERE id = ?').run(req.params.id)
+  if (!result.changes) return res.status(404).json({ error: 'Game not found.' })
+  res.json({ ok: true })
 })
 
 app.listen(port, () => console.log(`The Dark Odds API listening on ${port}`))

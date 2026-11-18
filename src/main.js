@@ -1,5 +1,9 @@
 import './style.css'
 
+if (new URLSearchParams(location.search).get('admin') === '1') {
+  await import('./admin.js')
+} else {
+
 const API = new URL(import.meta.env.VITE_API_BASE || 'https://the-dark-odds-api.onrender.com').origin
 const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))
 const root = document.querySelector('#root')
@@ -52,3 +56,5 @@ stkForm.addEventListener('submit', async event => {
     setTimeout(poll, 5000)
   } catch (error) { message.textContent = error.message; submit.disabled = false }
 })
+
+}

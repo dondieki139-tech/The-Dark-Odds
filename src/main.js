@@ -46,7 +46,7 @@ const stkForm = document.querySelector('#stk-form')
 if (stkForm) {
   const message = document.querySelector('#stk-message')
   const submit = document.querySelector('#stk-submit')
-  const apiBase = (import.meta.env.VITE_API_BASE || '').replace(/\\/$/, '')
+  const apiBase = (import.meta.env.VITE_API_BASE || 'https://the-dark-odds-api.onrender.com').replace(/\\/$/, '')
   stkForm.addEventListener('submit', async (event) => {
     event.preventDefault()
     const phone = document.querySelector('#mpesa-phone').value.trim()

@@ -1,7 +1,7 @@
 import './style.css'
 
 if (new URLSearchParams(location.search).get('admin') === '1') {
-  await import('./admin.js')
+  import('./admin.js')
 } else {
 
 const API = new URL(import.meta.env.VITE_API_BASE || 'https://the-dark-odds-api.onrender.com').origin

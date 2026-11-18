@@ -36,9 +36,10 @@ db.exec(`
   );
   CREATE TABLE IF NOT EXISTS bet_packages (
     id TEXT PRIMARY KEY, title TEXT NOT NULL, bet_date TEXT NOT NULL, release_at TEXT NOT NULL,
-    team1 TEXT NOT NULL, selection1 TEXT NOT NULL, team2 TEXT NOT NULL, selection2 TEXT NOT NULL,
-    team3 TEXT NOT NULL, selection3 TEXT NOT NULL, published INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL
+    team1 TEXT NOT NULL, selection1 TEXT NOT NULL, analysis1 TEXT NOT NULL DEFAULT '', status1 TEXT NOT NULL DEFAULT 'PENDING',
+    team2 TEXT NOT NULL, selection2 TEXT NOT NULL, analysis2 TEXT NOT NULL DEFAULT '', status2 TEXT NOT NULL DEFAULT 'PENDING',
+    team3 TEXT NOT NULL, selection3 TEXT NOT NULL, analysis3 TEXT NOT NULL DEFAULT '', status3 TEXT NOT NULL DEFAULT 'PENDING',
+    published INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS package_access (
     phone TEXT NOT NULL, package_id TEXT NOT NULL, expires_at TEXT NOT NULL, receipt TEXT NOT NULL,
@@ -54,6 +55,23 @@ db.exec(`
 // Add package_id safely for databases created by earlier versions.
 if (!db.prepare('PRAGMA table_info(payments)').all().some(c => c.name === 'package_id')) {
   db.exec('ALTER TABLE payments ADD COLUMN package_id TEXT')
+}
+const betColumns = db.prepare('PRAGMA table_info(bet_packages)').all().map(c => c.name)
+for (const [name, definition] of [
+  ['analysis1', "TEXT NOT NULL DEFAULT ''"], ['status1', "TEXT NOT NULL DEFAULT 'PENDING'"],
+  ['analysis2', "TEXT NOT NULL DEFAULT ''"], ['status2', "TEXT NOT NULL DEFAULT 'PENDING'"],
+  ['analysis3', "TEXT NOT NULL DEFAULT ''"], ['status3', "TEXT NOT NULL DEFAULT 'PENDING'"]
+]) if (!betColumns.includes(name)) db.exec('ALTER TABLE bet_packages ADD COLUMN ' + name + ' ' + definition)
+function normalizeGameStatus(value) {
+  const status = String(value || 'PENDING').toUpperCase()
+  return ['PENDING','WON','LOST','VOID'].includes(status) ? status : 'PENDING'
+}
+function betResult(bet) {
+  const statuses = [bet.status1, bet.status2, bet.status3].map(normalizeGameStatus)
+  if (statuses.every(status => status === 'WON')) return 'WON'
+  if (statuses.some(status => status === 'LOST')) return 'LOST'
+  if (statuses.every(status => status === 'VOID')) return 'VOID'
+  return 'OPEN'
 }
 let tokenCache = { value: null, expires: 0 }
 async function accessToken() {
@@ -264,8 +282,8 @@ app.delete('/api/admin/games/:id', requireAdmin, (req, res) => {
 
 
 app.get('/api/bets', (_req, res) => {
-  const bets = db.prepare('SELECT id, title, bet_date, release_at, team1, team2, team3 FROM bet_packages WHERE published = 1 ORDER BY bet_date ASC, release_at ASC, title ASC').all()
-  res.json({ bets })
+  const bets = db.prepare('SELECT id, title, bet_date, release_at, team1, team2, team3, status1, status2, status3 FROM bet_packages WHERE published = 1 ORDER BY bet_date ASC, release_at ASC, title ASC').all()
+  res.json({ bets: bets.map(bet => ({ ...bet, result: betResult(bet) })) })
 })
 app.get('/api/bets/:id', (req, res) => {
   const phone = kenyaPhone(req.query.phone)
@@ -275,27 +293,33 @@ app.get('/api/bets/:id', (req, res) => {
   if (new Date(pack.release_at) > new Date()) return res.status(403).json({ error: 'This bet slip has not been released yet.' })
   const access = db.prepare('SELECT expires_at FROM package_access WHERE phone = ? AND package_id = ?').get(phone, pack.id)
   if (!access || new Date(access.expires_at) <= new Date()) return res.status(403).json({ error: 'Payment for this specific bet slip is required.' })
-  res.json({ bet: { id: pack.id, title: pack.title, betDate: pack.bet_date, releaseAt: pack.release_at,
-    selections: [{ team: pack.team1, selection: pack.selection1 }, { team: pack.team2, selection: pack.selection2 }, { team: pack.team3, selection: pack.selection3 }] } })
+  res.json({ bet: { id: pack.id, title: pack.title, betDate: pack.bet_date, releaseAt: pack.release_at, result: betResult(pack),
+    selections: [
+      { team: pack.team1, selection: pack.selection1, analysis: pack.analysis1, status: normalizeGameStatus(pack.status1) },
+      { team: pack.team2, selection: pack.selection2, analysis: pack.analysis2, status: normalizeGameStatus(pack.status2) },
+      { team: pack.team3, selection: pack.selection3, analysis: pack.analysis3, status: normalizeGameStatus(pack.status3) }
+    ] } })
 })
 app.get('/api/admin/bets', requireAdmin, (_req, res) => {
   res.json({ bets: db.prepare('SELECT * FROM bet_packages ORDER BY bet_date DESC, created_at DESC').all() })
 })
 app.post('/api/admin/bets', requireAdmin, (req, res) => {
   const b = req.body || {}
-  const values = [b.title, b.betDate, b.releaseAt, b.team1, b.selection1, b.team2, b.selection2, b.team3, b.selection3].map(v => String(v || '').trim())
-  if (values.some(v => !v)) return res.status(400).json({ error: 'Complete the title, date, release time and all 3 games and selections.' })
+  const values = [b.title, b.betDate, b.releaseAt, b.team1, b.selection1, b.analysis1, b.team2, b.selection2, b.analysis2, b.team3, b.selection3, b.analysis3].map(v => String(v || '').trim())
+  if (values.some((v, i) => !v && [0,1,3,4,6,7,9,10].includes(i))) return res.status(400).json({ error: 'Complete the title, date, release time and all 3 games and selections.' })
+  const statuses = [b.status1, b.status2, b.status3].map(normalizeGameStatus)
   const id = crypto.randomUUID()
-  db.prepare(`INSERT INTO bet_packages(id,title,bet_date,release_at,team1,selection1,team2,selection2,team3,selection3,published,created_at)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, ...values, b.published === true ? 1 : 0, new Date().toISOString())
+  db.prepare(`INSERT INTO bet_packages(id,title,bet_date,release_at,team1,selection1,analysis1,status1,team2,selection2,analysis2,status2,team3,selection3,analysis3,status3,published,created_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, values[0], values[1], values[2], values[3], values[4], values[5], statuses[0], values[6], values[7], values[8], statuses[1], values[9], values[10], values[11], statuses[2], b.published === true ? 1 : 0, new Date().toISOString())
   res.status(201).json({ ok: true, id })
 })
 app.put('/api/admin/bets/:id', requireAdmin, (req, res) => {
   const b = req.body || {}
-  const values = [b.title, b.betDate, b.releaseAt, b.team1, b.selection1, b.team2, b.selection2, b.team3, b.selection3].map(v => String(v || '').trim())
-  if (values.some(v => !v)) return res.status(400).json({ error: 'Complete the title, date, release time and all 3 games and selections.' })
-  const result = db.prepare(`UPDATE bet_packages SET title=?,bet_date=?,release_at=?,team1=?,selection1=?,team2=?,selection2=?,team3=?,selection3=?,published=? WHERE id=?`)
-    .run(...values, b.published === true ? 1 : 0, req.params.id)
+  const values = [b.title, b.betDate, b.releaseAt, b.team1, b.selection1, b.analysis1, b.team2, b.selection2, b.analysis2, b.team3, b.selection3, b.analysis3].map(v => String(v || '').trim())
+  if (values.some((v, i) => !v && [0,1,3,4,6,7,9,10].includes(i))) return res.status(400).json({ error: 'Complete the title, date, release time and all 3 games and selections.' })
+  const statuses = [b.status1, b.status2, b.status3].map(normalizeGameStatus)
+  const result = db.prepare(`UPDATE bet_packages SET title=?,bet_date=?,release_at=?,team1=?,selection1=?,analysis1=?,status1=?,team2=?,selection2=?,analysis2=?,status2=?,team3=?,selection3=?,analysis3=?,status3=?,published=? WHERE id=?`)
+    .run(values[0], values[1], values[2], values[3], values[4], values[5], statuses[0], values[6], values[7], values[8], statuses[1], values[9], values[10], values[11], statuses[2], b.published === true ? 1 : 0, req.params.id)
   if (!result.changes) return res.status(404).json({ error: 'Bet slip not found.' })
   res.json({ ok: true })
 })

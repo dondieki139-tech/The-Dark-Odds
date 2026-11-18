@@ -264,7 +264,7 @@ app.delete('/api/admin/games/:id', requireAdmin, (req, res) => {
 
 
 app.get('/api/bets', (_req, res) => {
-  const bets = db.prepare('SELECT id, title, bet_date, release_at FROM bet_packages WHERE published = 1 ORDER BY bet_date ASC, title ASC').all()
+  const bets = db.prepare('SELECT id, title, bet_date, release_at, team1, team2, team3 FROM bet_packages WHERE published = 1 ORDER BY bet_date ASC, release_at ASC, title ASC').all()
   res.json({ bets })
 })
 app.get('/api/bets/:id', (req, res) => {

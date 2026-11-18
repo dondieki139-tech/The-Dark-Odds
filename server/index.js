@@ -34,6 +34,16 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS memberships (
     phone TEXT PRIMARY KEY, expires_at TEXT NOT NULL, receipt TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS bet_packages (
+    id TEXT PRIMARY KEY, title TEXT NOT NULL, bet_date TEXT NOT NULL, release_at TEXT NOT NULL,
+    team1 TEXT NOT NULL, selection1 TEXT NOT NULL, team2 TEXT NOT NULL, selection2 TEXT NOT NULL,
+    team3 TEXT NOT NULL, selection3 TEXT NOT NULL, published INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS package_access (
+    phone TEXT NOT NULL, package_id TEXT NOT NULL, expires_at TEXT NOT NULL, receipt TEXT NOT NULL,
+    PRIMARY KEY(phone, package_id)
+  );
   CREATE TABLE IF NOT EXISTS games (
     id TEXT PRIMARY KEY, league TEXT NOT NULL, home TEXT NOT NULL, away TEXT NOT NULL,
     kickoff TEXT NOT NULL, pick TEXT NOT NULL, odds TEXT, analysis TEXT,
@@ -41,6 +51,10 @@ db.exec(`
   );
 `)
 
+// Add package_id safely for databases created by earlier versions.
+if (!db.prepare('PRAGMA table_info(payments)').all().some(c => c.name === 'package_id')) {
+  db.exec('ALTER TABLE payments ADD COLUMN package_id TEXT')
+}
 let tokenCache = { value: null, expires: 0 }
 async function accessToken() {
   if (tokenCache.value && Date.now() < tokenCache.expires) return tokenCache.value
@@ -72,6 +86,9 @@ app.get('/api/health', (_req, res) => res.json({
 app.post('/api/stkpush', async (req, res) => {
   if (missing.length) return res.status(503).json({ error: 'Daraja server configuration is incomplete.' })
   const phone = kenyaPhone(req.body?.phone)
+  const packageId = String(req.body?.packageId || '')
+  const pack = db.prepare('SELECT id FROM bet_packages WHERE id = ? AND published = 1').get(packageId)
+  if (!pack) return res.status(400).json({ error: 'Choose an available published bet slip before paying.' })
   if (!phone) return res.status(400).json({ error: 'Enter a valid Kenyan M-Pesa number.' })
   try {
     const token = await accessToken()
@@ -87,7 +104,7 @@ app.post('/api/stkpush', async (req, res) => {
       PhoneNumber: phone,
       CallBackURL: process.env.DARAJA_CALLBACK_URL,
       AccountReference: 'DARKODDS',
-      TransactionDesc: 'The Dark Odds 24-hour VIP'
+      TransactionDesc: 'The Dark Odds bet slip'
     }
     const response = await fetch(baseUrl + '/mpesa/stkpush/v1/processrequest', {
       method: 'POST',
@@ -99,9 +116,9 @@ app.post('/api/stkpush', async (req, res) => {
       return res.status(502).json({ error: data.errorMessage || data.ResponseDescription || 'Daraja rejected the STK request.' })
     }
     db.prepare(`INSERT OR REPLACE INTO payments
-      (checkout_id, merchant_id, phone, amount, status, created_at)
-      VALUES (?, ?, ?, 360, 'PENDING', ?)`)
-      .run(data.CheckoutRequestID, data.MerchantRequestID || null, phone, new Date().toISOString())
+      (checkout_id, merchant_id, phone, amount, status, created_at, package_id)
+      VALUES (?, ?, ?, 360, 'PENDING', ?, ?)`)
+      .run(data.CheckoutRequestID, data.MerchantRequestID || null, phone, new Date().toISOString(), packageId)
     res.json({ ok: true, checkoutRequestId: data.CheckoutRequestID, message: 'Check your phone and enter your M-Pesa PIN to approve.' })
   } catch (error) {
     console.error('STK request failed:', error.message)
@@ -133,15 +150,13 @@ app.post('/api/daraja/callback', (req, res) => {
       return res.json({ ResultCode: 0, ResultDesc: 'Accepted' })
     }
     const now = new Date()
-    const existing = db.prepare('SELECT expires_at FROM memberships WHERE phone = ?').get(payment.phone)
-    const start = existing && new Date(existing.expires_at) > now ? new Date(existing.expires_at) : now
-    const expiry = new Date(start.getTime() + 24 * 60 * 60 * 1000).toISOString()
+    const expiry = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString()
     const grant = db.transaction(() => {
       db.prepare("UPDATE payments SET status = 'PAID', receipt = ?, result_code = '0', paid_at = ? WHERE checkout_id = ?")
         .run(receipt, now.toISOString(), payment.checkout_id)
-      db.prepare(`INSERT INTO memberships(phone, expires_at, receipt) VALUES (?, ?, ?)
-        ON CONFLICT(phone) DO UPDATE SET expires_at = excluded.expires_at, receipt = excluded.receipt`)
-        .run(payment.phone, expiry, receipt)
+      if (payment.package_id) db.prepare(`INSERT INTO package_access(phone, package_id, expires_at, receipt) VALUES (?, ?, ?, ?)
+        ON CONFLICT(phone, package_id) DO UPDATE SET expires_at = excluded.expires_at, receipt = excluded.receipt`)
+        .run(payment.phone, payment.package_id, expiry, receipt)
     })
     grant()
     res.json({ ResultCode: 0, ResultDesc: 'Accepted' })
@@ -152,10 +167,11 @@ app.post('/api/daraja/callback', (req, res) => {
 })
 
 app.get('/api/payment/:checkoutId', (req, res) => {
-  const payment = db.prepare('SELECT status, phone FROM payments WHERE checkout_id = ?').get(req.params.checkoutId)
+  const payment = db.prepare('SELECT status, phone, package_id FROM payments WHERE checkout_id = ?').get(req.params.checkoutId)
   if (!payment) return res.status(404).json({ error: 'Payment not found.' })
   const membership = db.prepare('SELECT expires_at FROM memberships WHERE phone = ?').get(payment.phone)
-  res.json({ status: payment.status, activeUntil: membership?.expires_at || null })
+  const access = payment.package_id ? db.prepare('SELECT expires_at FROM package_access WHERE phone = ? AND package_id = ?').get(payment.phone, payment.package_id) : null
+  res.json({ status: payment.status, packageId: payment.package_id, activeUntil: access?.expires_at || membership?.expires_at || null })
 })
 
 app.get('/api/membership', (req, res) => {
@@ -240,6 +256,50 @@ app.put('/api/admin/games/:id', requireAdmin, (req, res) => {
 app.delete('/api/admin/games/:id', requireAdmin, (req, res) => {
   const result = db.prepare('DELETE FROM games WHERE id = ?').run(req.params.id)
   if (!result.changes) return res.status(404).json({ error: 'Game not found.' })
+  res.json({ ok: true })
+})
+
+
+app.get('/api/bets', (_req, res) => {
+  const bets = db.prepare('SELECT id, title, bet_date, release_at FROM bet_packages WHERE published = 1 ORDER BY bet_date ASC, title ASC').all()
+  res.json({ bets })
+})
+app.get('/api/bets/:id', (req, res) => {
+  const phone = kenyaPhone(req.query.phone)
+  if (!phone) return res.status(400).json({ error: 'Enter the M-Pesa phone number used for this bet slip.' })
+  const pack = db.prepare('SELECT * FROM bet_packages WHERE id = ? AND published = 1').get(req.params.id)
+  if (!pack) return res.status(404).json({ error: 'Bet slip not found.' })
+  if (new Date(pack.release_at) > new Date()) return res.status(403).json({ error: 'This bet slip has not been released yet.' })
+  const access = db.prepare('SELECT expires_at FROM package_access WHERE phone = ? AND package_id = ?').get(phone, pack.id)
+  if (!access || new Date(access.expires_at) <= new Date()) return res.status(403).json({ error: 'Payment for this specific bet slip is required.' })
+  res.json({ bet: { id: pack.id, title: pack.title, betDate: pack.bet_date, releaseAt: pack.release_at,
+    selections: [{ team: pack.team1, selection: pack.selection1 }, { team: pack.team2, selection: pack.selection2 }, { team: pack.team3, selection: pack.selection3 }] } })
+})
+app.get('/api/admin/bets', requireAdmin, (_req, res) => {
+  res.json({ bets: db.prepare('SELECT * FROM bet_packages ORDER BY bet_date DESC, created_at DESC').all() })
+})
+app.post('/api/admin/bets', requireAdmin, (req, res) => {
+  const b = req.body || {}
+  const values = [b.title, b.betDate, b.releaseAt, b.team1, b.selection1, b.team2, b.selection2, b.team3, b.selection3].map(v => String(v || '').trim())
+  if (values.some(v => !v)) return res.status(400).json({ error: 'Complete the title, date, release time and all 3 games and selections.' })
+  const id = crypto.randomUUID()
+  db.prepare(`INSERT INTO bet_packages(id,title,bet_date,release_at,team1,selection1,team2,selection2,team3,selection3,published,created_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, ...values, b.published === true ? 1 : 0, new Date().toISOString())
+  res.status(201).json({ ok: true, id })
+})
+app.put('/api/admin/bets/:id', requireAdmin, (req, res) => {
+  const b = req.body || {}
+  const values = [b.title, b.betDate, b.releaseAt, b.team1, b.selection1, b.team2, b.selection2, b.team3, b.selection3].map(v => String(v || '').trim())
+  if (values.some(v => !v)) return res.status(400).json({ error: 'Complete the title, date, release time and all 3 games and selections.' })
+  const result = db.prepare(`UPDATE bet_packages SET title=?,bet_date=?,release_at=?,team1=?,selection1=?,team2=?,selection2=?,team3=?,selection3=?,published=? WHERE id=?`)
+    .run(...values, b.published === true ? 1 : 0, req.params.id)
+  if (!result.changes) return res.status(404).json({ error: 'Bet slip not found.' })
+  res.json({ ok: true })
+})
+app.delete('/api/admin/bets/:id', requireAdmin, (req, res) => {
+  db.prepare('DELETE FROM package_access WHERE package_id = ?').run(req.params.id)
+  const result = db.prepare('DELETE FROM bet_packages WHERE id = ?').run(req.params.id)
+  if (!result.changes) return res.status(404).json({ error: 'Bet slip not found.' })
   res.json({ ok: true })
 })
 

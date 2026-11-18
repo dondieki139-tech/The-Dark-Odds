@@ -1,34 +1,46 @@
 # The Dark Odds
 
-A responsive football-analysis and premium-membership landing site built with Vite.
+Responsive football-analysis website built with Vite, with an Express API for Safaricom Daraja STK Push.
 
-## Run locally
+## Render services
+
+- Frontend static site: `https://the-dark-odds.onrender.com`
+- Backend API: `https://the-dark-odds-api.onrender.com`
+- Frontend build: `npm install && npm run build`
+- Frontend publish directory: `dist`
+- Backend build: `npm install`
+- Backend start: `npm start`
+
+The frontend reads `VITE_API_BASE` at build time. Set it to the backend URL on the Render static site's Environment page.
+
+## Daraja configuration
+
+Set these only in the backend Render service's Environment page. Never commit secrets or place them in frontend variables:
+
+- `DARAJA_ENV=sandbox` until Safaricom approves production credentials.
+- `DARAJA_CONSUMER_KEY`
+- `DARAJA_CONSUMER_SECRET`
+- `DARAJA_SHORTCODE`
+- `DARAJA_PASSKEY`
+- `DARAJA_CALLBACK_URL=https://the-dark-odds-api.onrender.com/api/daraja/callback`
+- `DARAJA_TRANSACTION_TYPE=CustomerPayBillOnline` for PayBill. Use the Safaricom-approved transaction type for a Till.
+- `DATA_DIR` set to a persistent mounted disk path before relying on SQLite records.
+
+The configured price is KSh 360 for 24 hours. Confirm the shortcode type and Daraja app credentials with Safaricom before switching to production. Do not send credentials in chat.
+
+## Important launch blockers
+
+- Match cards are explicitly demo placeholders, not live fixtures or verified predictions.
+- The API currently records a 24-hour membership after a matching successful callback, but there is no secure member login or server-protected VIP content page yet. Do not advertise paid VIP content as available until this is implemented and tested.
+- SQLite currently defaults to `./data`. Render's ephemeral filesystem can lose data on restart or redeploy. Attach persistent storage or migrate to a managed database before accepting real payments.
+- Test STK Push and callback end-to-end in Daraja Sandbox first. Confirm the amount, phone, receipt and membership expiry. Only switch to production after Safaricom approves the live shortcode and production app.
+- Add rate limiting, stronger callback/payment verification, and operational monitoring before public launch.
+
+## Local development
+
 ```bash
 npm install
 npm run dev
 ```
 
-## Deploy
-A GitHub Actions workflow builds the site and deploys it to GitHub Pages on every push to `main`. In repository Settings → Pages, set the source to **GitHub Actions**.
-
-## Launch limitations
-- Payments currently use manual M-Pesa Send Money instructions to the owner-provided number **+254746771677**.
-- Payment is **not** automatically verified and this static site does not unlock or expire paid accounts. A secure backend and Daraja credentials (consumer key/secret, shortcode, passkey, callback URL) plus verified transaction flow are required before automated STK Push and membership activation can go live.
-- Match cards are clearly marked demo placeholders. Replace them with researched fixtures and current odds before publishing predictions.
-- Never put Daraja secrets in frontend code or commit them to GitHub. Store secrets only in encrypted server-side environment variables.
-- Betting is risky; 18+ only and no outcomes are guaranteed.
-
- 
-## Daraja STK Push backend (sandbox first)
-
-The frontend calls a separate Node.js API. GitHub Pages hosts only the static site; it cannot run the payment server.
-
-1. Deploy this repository's `server/index.js` as a Node web service on a backend host that supports persistent disk storage.
-2. Set the backend environment variables from `.env.example` in that host's encrypted Environment/Secrets settings. Set `DARAJA_CALLBACK_URL` to the public backend URL plus `/api/daraja/callback`.
-3. Set `DARAJA_ENV=sandbox`, the Sandbox app Consumer Key/Secret, Sandbox shortcode and Sandbox passkey. Keep all secrets on the backend only.
-4. Set `VITE_API_BASE` in the frontend build environment to the backend's public base URL, then rebuild/redeploy the GitHub Pages site.
-5. Test with Daraja's Sandbox test MSISDN and confirm the callback marks a KSh 360 payment as PAID.
-
-The SQLite database must be stored on a persistent disk (set `DATA_DIR` to its mounted path). Without persistent storage, payment and membership records can be lost on restart. Do not switch to production until Safaricom has approved your live shortcode and production app credentials.
-
-**Important limitations:** This initial integration grants 24-hour access against the phone number after a successful callback, but it does not yet provide member login or a protected VIP content page. A production launch needs authentication and server-side protection for premium content, plus end-to-end testing. Never put Consumer Secret or Passkey in Vite variables or frontend code.
+Run the API with `npm start` after configuring backend environment variables.

@@ -106,7 +106,7 @@ app.post('/api/stkpush', async (req, res) => {
   const phone = kenyaPhone(req.body?.phone)
   const packageId = String(req.body?.packageId || '')
   const pack = db.prepare('SELECT id FROM bet_packages WHERE id = ? AND published = 1').get(packageId)
-  if (!pack) return res.status(400).json({ error: 'Choose an available published bet slip before paying.' })
+  if (!pack) return res.status(400).json({ error: 'Choose an available published prediction package before paying.' })
   if (!phone) return res.status(400).json({ error: 'Enter a valid Kenyan M-Pesa number.' })
   try {
     const token = await accessToken()
@@ -122,7 +122,7 @@ app.post('/api/stkpush', async (req, res) => {
       PhoneNumber: phone,
       CallBackURL: process.env.DARAJA_CALLBACK_URL,
       AccountReference: 'DARKODDS',
-      TransactionDesc: 'The Dark Odds bet slip'
+      TransactionDesc: 'The Dark Odds prediction access'
     }
     const response = await fetch(baseUrl + '/mpesa/stkpush/v1/processrequest', {
       method: 'POST',
@@ -287,12 +287,12 @@ app.get('/api/bets', (_req, res) => {
 })
 app.get('/api/bets/:id', (req, res) => {
   const phone = kenyaPhone(req.query.phone)
-  if (!phone) return res.status(400).json({ error: 'Enter the M-Pesa phone number used for this bet slip.' })
+  if (!phone) return res.status(400).json({ error: 'Enter the M-Pesa phone number used for this prediction package.' })
   const pack = db.prepare('SELECT * FROM bet_packages WHERE id = ? AND published = 1').get(req.params.id)
   if (!pack) return res.status(404).json({ error: 'Bet slip not found.' })
-  if (new Date(pack.release_at) > new Date()) return res.status(403).json({ error: 'This bet slip has not been released yet.' })
+  if (new Date(pack.release_at) > new Date()) return res.status(403).json({ error: 'This prediction package has not been released yet.' })
   const access = db.prepare('SELECT expires_at FROM package_access WHERE phone = ? AND package_id = ?').get(phone, pack.id)
-  if (!access || new Date(access.expires_at) <= new Date()) return res.status(403).json({ error: 'Payment for this specific bet slip is required.' })
+  if (!access || new Date(access.expires_at) <= new Date()) return res.status(403).json({ error: 'Payment for this specific prediction package is required.' })
   res.json({ bet: { id: pack.id, title: pack.title, betDate: pack.bet_date, releaseAt: pack.release_at, result: betResult(pack),
     selections: [
       { team: pack.team1, selection: pack.selection1, analysis: pack.analysis1, status: normalizeGameStatus(pack.status1) },

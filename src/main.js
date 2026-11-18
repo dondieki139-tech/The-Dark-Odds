@@ -35,8 +35,8 @@ const stkForm = document.querySelector('#stk-form')
 stkForm.addEventListener('submit', async event => {
   event.preventDefault()
   const phone = document.querySelector('#mpesa-phone').value.trim()
-  if (!selectedBetId) { message.textContent = 'Please choose the specific bet slip you want to buy first.'; return }
   const message = document.querySelector('#stk-message')
+  if (!selectedBetId) { message.textContent = 'Please choose the specific bet slip you want to buy first.'; return }
   const submit = document.querySelector('#stk-submit')
   submit.disabled = true; message.textContent = 'Connecting to M-Pesa…'
   try {

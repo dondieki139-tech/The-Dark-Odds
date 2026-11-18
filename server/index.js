@@ -5,6 +5,13 @@ import path from 'node:path'
 import fs from 'node:fs'
 
 const app = express()
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+  if (req.method === 'OPTIONS') return res.sendStatus(204)
+  next()
+})
 app.use(express.json({ limit: '100kb' }))
 
 const required = ['DARAJA_CONSUMER_KEY','DARAJA_CONSUMER_SECRET','DARAJA_SHORTCODE','DARAJA_PASSKEY','DARAJA_CALLBACK_URL']

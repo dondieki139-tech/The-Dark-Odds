@@ -44,3 +44,11 @@ npm run dev
 ```
 
 Run the API with `npm start` after configuring backend environment variables.
+
+## Admin dashboard
+
+- Open `https://the-dark-odds.onrender.com/?admin=1`.
+- Set `ADMIN_PASSWORD` in the backend Render service Environment page before signing in. Choose a unique password and do not put it in GitHub or share it in chat.
+- `ADMIN_SESSION_SECRET` has been configured privately in the backend Render environment.
+- The dashboard lets the administrator create, edit, delete, and publish paid games. Only published match details appear publicly; the paid selection and analysis are not returned by the public games endpoint.
+- Game records are stored in SQLite. Configure a persistent disk and set `DATA_DIR` to its mount path before relying on saved games across restarts or deploys.

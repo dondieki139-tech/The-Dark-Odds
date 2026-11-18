@@ -14,8 +14,7 @@ app.use((req, res, next) => {
 })
 app.use(express.json({ limit: '100kb' }))
 
-const required = ['DARAJA_CONSUMER_KEY','DARAJA_CONSUMER_SECRET','DARAJA_SHORTCODE','DARAJA_PASSKEY','DARAJA_CALLBACK_URL']
-const missing = required.filter(k => !process.env[k])
+const intasendConfigured = Boolean(process.env.INTASEND_SECRET_KEY && process.env.INTASEND_WEBHOOK_CHALLENGE)
 const port = Number(process.env.PORT || 3000)
 const baseUrl = process.env.DARAJA_ENV === 'production'
   ? 'https://api.safaricom.co.ke'
@@ -97,50 +96,101 @@ function stkPassword(timestamp) {
 }
 
 app.get('/api/health', (_req, res) => res.json({
-  ok: true, darajaConfigured: missing.length === 0,
-  mode: process.env.DARAJA_ENV || 'sandbox'
+  ok: true, intasendConfigured,
+  paymentProvider: 'intasend',
+  mode: process.env.INTASEND_SECRET_KEY?.includes('_live_') ? 'live' : 'sandbox'
 }))
 
 app.post('/api/stkpush', async (req, res) => {
-  if (missing.length) return res.status(503).json({ error: 'Daraja server configuration is incomplete.' })
+  if (!intasendConfigured) return res.status(503).json({ error: 'IntaSend is not configured yet. Add the secret key and webhook challenge in Render.' })
   const phone = kenyaPhone(req.body?.phone)
   const packageId = String(req.body?.packageId || '')
   const pack = db.prepare('SELECT id FROM bet_packages WHERE id = ? AND published = 1').get(packageId)
   if (!pack) return res.status(400).json({ error: 'Choose an available published prediction package before paying.' })
   if (!phone) return res.status(400).json({ error: 'Enter a valid Kenyan M-Pesa number.' })
+
+  const apiRef = 'DARKODDS-' + crypto.randomUUID()
+  db.prepare(`INSERT INTO payments
+    (checkout_id, merchant_id, phone, amount, status, created_at, package_id)
+    VALUES (?, NULL, ?, 360, 'PENDING', ?, ?)`)
+    .run(apiRef, phone, new Date().toISOString(), packageId)
+
   try {
-    const token = await accessToken()
-    const timestamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14)
-    const body = {
-      BusinessShortCode: process.env.DARAJA_SHORTCODE,
-      Password: stkPassword(timestamp),
-      Timestamp: timestamp,
-      TransactionType: process.env.DARAJA_TRANSACTION_TYPE || 'CustomerPayBillOnline',
-      Amount: 360,
-      PartyA: phone,
-      PartyB: process.env.DARAJA_SHORTCODE,
-      PhoneNumber: phone,
-      CallBackURL: process.env.DARAJA_CALLBACK_URL,
-      AccountReference: 'DARKODDS',
-      TransactionDesc: 'The Dark Odds prediction access'
-    }
-    const response = await fetch(baseUrl + '/mpesa/stkpush/v1/processrequest', {
+    const response = await fetch('https://api.intasend.com/api/v1/payment/mpesa-stk-push/', {
       method: 'POST',
-      headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+      headers: {
+        Authorization: 'Bearer ' + process.env.INTASEND_SECRET_KEY,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ amount: 360, phone_number: phone, api_ref: apiRef })
     })
-    const data = await response.json()
-    if (!response.ok || data.ResponseCode !== '0') {
-      return res.status(502).json({ error: data.errorMessage || data.ResponseDescription || 'Daraja rejected the STK request.' })
+    const data = await response.json().catch(() => ({}))
+    const invoiceId = data.invoice?.invoice_id || data.invoice_id || data.id || null
+    if (!response.ok || !invoiceId) {
+      db.prepare("UPDATE payments SET status = 'FAILED', result_code = ? WHERE checkout_id = ?")
+        .run(String(data.message || data.errors || 'INTASEND_REQUEST_FAILED').slice(0, 200), apiRef)
+      return res.status(502).json({ error: data.message || data.errors || 'IntaSend could not start the M-Pesa request.' })
     }
-    db.prepare(`INSERT OR REPLACE INTO payments
-      (checkout_id, merchant_id, phone, amount, status, created_at, package_id)
-      VALUES (?, ?, ?, 360, 'PENDING', ?, ?)`)
-      .run(data.CheckoutRequestID, data.MerchantRequestID || null, phone, new Date().toISOString(), packageId)
-    res.json({ ok: true, checkoutRequestId: data.CheckoutRequestID, message: 'Check your phone and enter your M-Pesa PIN to approve.' })
+    db.prepare('UPDATE payments SET merchant_id = ? WHERE checkout_id = ?').run(String(invoiceId), apiRef)
+    res.json({
+      ok: true,
+      checkoutRequestId: apiRef,
+      message: 'M-Pesa request sent through IntaSend. Check your phone and enter your PIN to approve.'
+    })
   } catch (error) {
-    console.error('STK request failed:', error.message)
-    res.status(502).json({ error: 'Could not start M-Pesa payment. Please try again.' })
+    console.error('IntaSend STK request failed:', error.message)
+    db.prepare("UPDATE payments SET status = 'FAILED', result_code = 'INTASEND_NETWORK_ERROR' WHERE checkout_id = ?").run(apiRef)
+    res.status(502).json({ error: 'Could not start the IntaSend payment. Please try again.' })
+  }
+})
+
+app.post('/api/intasend/webhook', (req, res) => {
+  try {
+    const received = String(req.body?.challenge || '')
+    const expected = String(process.env.INTASEND_WEBHOOK_CHALLENGE || '')
+    if (!expected || !received || !safeEqual(received, expected)) {
+      return res.status(401).json({ error: 'Invalid webhook challenge.' })
+    }
+    if (req.body?.topic !== 'collection_event') return res.json({ ok: true })
+
+    const apiRef = String(req.body?.api_ref || '')
+    if (!apiRef) return res.status(400).json({ error: 'Missing payment reference.' })
+    const payment = db.prepare('SELECT * FROM payments WHERE checkout_id = ?').get(apiRef)
+    if (!payment || payment.status === 'PAID') return res.json({ ok: true })
+
+    const state = String(req.body?.state || '').toUpperCase()
+    if (state === 'FAILED' || state === 'CANCELED') {
+      db.prepare("UPDATE payments SET status = 'FAILED', result_code = ? WHERE checkout_id = ? AND status <> 'PAID'")
+        .run(String(req.body?.failed_code || state), apiRef)
+      return res.json({ ok: true })
+    }
+    if (state !== 'COMPLETE') return res.json({ ok: true })
+
+    const amount = Number(req.body?.value)
+    const currency = String(req.body?.currency || '').toUpperCase()
+    const paidPhone = kenyaPhone(req.body?.account)
+    const provider = String(req.body?.provider || '').toUpperCase()
+    const receipt = String(req.body?.mpesa_reference || req.body?.provider_ref || '')
+    if (amount !== 360 || currency !== 'KES' || paidPhone !== payment.phone || provider !== 'M-PESA' || !receipt) {
+      db.prepare("UPDATE payments SET status = 'REVIEW', result_code = 'INTASEND_CALLBACK_MISMATCH' WHERE checkout_id = ? AND status <> 'PAID'")
+        .run(apiRef)
+      return res.json({ ok: true })
+    }
+
+    const now = new Date()
+    const expiry = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString()
+    const grant = db.transaction(() => {
+      db.prepare("UPDATE payments SET status = 'PAID', receipt = ?, result_code = '0', paid_at = ? WHERE checkout_id = ? AND status <> 'PAID'")
+        .run(receipt, now.toISOString(), apiRef)
+      if (payment.package_id) db.prepare(`INSERT INTO package_access(phone, package_id, expires_at, receipt) VALUES (?, ?, ?, ?)
+        ON CONFLICT(phone, package_id) DO UPDATE SET expires_at = excluded.expires_at, receipt = excluded.receipt`)
+        .run(payment.phone, payment.package_id, expiry, receipt)
+    })
+    grant()
+    res.json({ ok: true })
+  } catch (error) {
+    console.error('IntaSend webhook processing failed:', error.message)
+    res.status(500).json({ error: 'Webhook processing failed.' })
   }
 })
 

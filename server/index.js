@@ -49,10 +49,10 @@ async function accessToken() {
   return tokenCache.value
 }
 function kenyaPhone(value) {
-  const digits = String(value || '').replace(/\\D/g, '')
-  if (/^07\\d{8}$/.test(digits)) return '254' + digits.slice(1)
-  if (/^01\\d{8}$/.test(digits)) return '254' + digits.slice(1)
-  if (/^254[17]\\d{8}$/.test(digits)) return digits
+  const digits = String(value || '').replace(/\D/g, '')
+  if (/^07\d{8}$/.test(digits)) return '254' + digits.slice(1)
+  if (/^01\d{8}$/.test(digits)) return '254' + digits.slice(1)
+  if (/^254[17]\d{8}$/.test(digits)) return digits
   return null
 }
 function stkPassword(timestamp) {

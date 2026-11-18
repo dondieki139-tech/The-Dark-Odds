@@ -1,54 +1,46 @@
 # The Dark Odds
 
-Responsive football-analysis website built with Vite, with an Express API for Safaricom Daraja STK Push.
+Responsive football-analysis website built with Vite and an Express API. Paid prediction packages cost KSh 360 each.
 
 ## Render services
 
-- Frontend static site: `https://the-dark-odds.onrender.com`
+- Frontend: `https://the-dark-odds.onrender.com`
 - Backend API: `https://the-dark-odds-api.onrender.com`
 - Frontend build: `npm install && npm run build`
 - Frontend publish directory: `dist`
-- Backend build: `npm install`
 - Backend start: `npm start`
 
-The frontend reads `VITE_API_BASE` at build time. Set it to the backend URL on the Render static site's Environment page.
+The frontend reads `VITE_API_BASE` at build time.
 
-## Daraja configuration
+## IntaSend M-Pesa configuration
 
-Set these only in the backend Render service's Environment page. Never commit secrets or place them in frontend variables:
+The backend starts an IntaSend M-Pesa STK Push from `POST /api/stkpush`. It creates a pending payment reference before contacting IntaSend and grants package access only after a verified `collection_event` webhook reports `COMPLETE`, KES 360, the matching customer phone, M-Pesa provider and receipt.
 
-- `DARAJA_ENV=sandbox` until Safaricom approves production credentials.
-- `DARAJA_CONSUMER_KEY`
-- `DARAJA_CONSUMER_SECRET`
-- `DARAJA_SHORTCODE`
-- `DARAJA_PASSKEY`
-- `DARAJA_CALLBACK_URL=https://the-dark-odds-api.onrender.com/api/daraja/callback`
-- `DARAJA_TRANSACTION_TYPE=CustomerPayBillOnline` for PayBill. Use the Safaricom-approved transaction type for a Till.
-- `DATA_DIR` set to a persistent mounted disk path before relying on SQLite records.
+Set these only in the backend Render service's Environment page. Never commit or expose the secret key:
 
-The configured price is KSh 360 for 24 hours. Confirm the shortcode type and Daraja app credentials with Safaricom before switching to production. Do not send credentials in chat.
+- `INTASEND_SECRET_KEY` — sandbox key first (`ISSecretKey_test_...`), then live key only after sandbox tests.
+- `INTASEND_WEBHOOK_CHALLENGE` — a long random secret string shared with the webhook configuration.
 
-## Important launch blockers
+In IntaSend Dashboard → Settings → Webhooks, create a webhook with:
 
-- Match cards are explicitly demo placeholders, not live fixtures or verified predictions.
-- The API currently records a 24-hour membership after a matching successful callback, but there is no secure member login or server-protected VIP content page yet. Do not advertise paid VIP content as available until this is implemented and tested.
-- SQLite currently defaults to `./data`. Render's ephemeral filesystem can lose data on restart or redeploy. Attach persistent storage or migrate to a managed database before accepting real payments.
-- Test STK Push and callback end-to-end in Daraja Sandbox first. Confirm the amount, phone, receipt and membership expiry. Only switch to production after Safaricom approves the live shortcode and production app.
-- Add rate limiting, stronger callback/payment verification, and operational monitoring before public launch.
+- Endpoint: `https://the-dark-odds-api.onrender.com/api/intasend/webhook`
+- Challenge: exactly the same value as `INTASEND_WEBHOOK_CHALLENGE`
+- Event: `collection_event`
 
-## Local development
+IntaSend API base: `https://api.intasend.com/api/v1/`. Test with sandbox keys before switching to live keys. Do not interpret a pending STK request or browser redirect as a successful payment; only a verified COMPLETE webhook unlocks the package.
 
-```bash
-npm install
-npm run dev
-```
+## Launch blockers — do not accept live payments until resolved
 
-Run the API with `npm start` after configuring backend environment variables.
+- The backend uses SQLite. Render's default filesystem is ephemeral; attach a persistent disk and set `DATA_DIR` to its mount path, or migrate to a managed database, before relying on payment or package records.
+- Paid content access currently uses the phone number supplied by the customer as its lookup credential. Add a secure purchase/session token before public launch; a phone number alone is not strong authentication.
+- Match cards are admin-entered placeholders, not automatically verified live fixtures or guaranteed predictions.
+- Complete sandbox STK, webhook, callback replay, amount/phone mismatch, and package-unlock tests before live activation.
+- Confirm the IntaSend account is approved for this digital-predictions business and verify its settlement/withdrawal options and fees in the IntaSend dashboard.
 
 ## Admin dashboard
 
 - Open `https://the-dark-odds.onrender.com/?admin=1`.
-- Set `ADMIN_PASSWORD` in the backend Render service Environment page before signing in. Choose a unique password and do not put it in GitHub or share it in chat.
-- `ADMIN_SESSION_SECRET` has been configured privately in the backend Render environment.
-- The dashboard lets the administrator create, edit, delete, and publish paid games. Only published match details appear publicly; the paid selection and analysis are not returned by the public games endpoint.
-- Game records are stored in SQLite. Configure a persistent disk and set `DATA_DIR` to its mount path before relying on saved games across restarts or deploys.
+- Set `ADMIN_PASSWORD` privately in the backend Render environment.
+- `ADMIN_SESSION_SECRET` is used to sign admin sessions.
+- Admins can create, edit, publish and update prediction packages.
+- Configure persistent storage before relying on saved packages and payment history.

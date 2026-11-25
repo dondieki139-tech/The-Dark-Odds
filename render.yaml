@@ -1,0 +1,23 @@
+databases:
+  - name: victory-church-admin-db
+    plan: free
+    region: singapore
+    postgresMajorVersion: 18
+
+services:
+  - type: web
+    name: victory-church-admin-api
+    runtime: node
+    region: singapore
+    plan: free
+    rootDir: church-admin-api
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: victory-church-admin-db
+          property: connectionString
+      - key: ADMIN_PASSWORD
+        sync: false
